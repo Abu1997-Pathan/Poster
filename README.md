@@ -1,6 +1,7 @@
 # Spatial Transcriptomics Integration Project
 
-![Expert_vs_Automated_Clusters](https://github.com/user-attachments/assets/3fe42d5a-707b-4ed5-aabc-2140ac187785)
+![Expert_vs_Automated_Clusters](https://github.com/user-attachments/assets/89b96a85-6caf-4af6-a0c9-02491d5d7b41)
+
 
 
 ## Overview
