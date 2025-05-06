@@ -1,0 +1,471 @@
+---
+title: "Spatial Transcriptomics"
+format: html
+editor: visual
+---
+
+# Preparing figure for poster
+
+## Install the libraries if not installed
+
+```{r}
+# Before performing the analysis, this line runs the R script install/install.R, which is likely to contain commands to install the required R packages.
+
+source("install/install.R")
+```
+
+## Load the libraries
+
+```{r}
+
+# Loads the necessary libraries for spatial transcriptomics analysis and visualization:
+
+# Seurat: Core package for single-cell and spatial transcriptomics analysis.
+
+# dplyr: For data manipulation.
+
+# ggplot2: For creating plots.
+
+# patchwork and cowplot: For combining multiple ggplots into one figure (useful for posters).
+
+# ggrepel: Ensures readable gene names on scatter plots.
+
+# mclust: Identify clusters from numeric data.
+
+# glmGamPoi: Speeds up differential expression analysis for large datasets.
+
+# RColorBrewer: tool for accessing and using color palettes in the visualizations.
+
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+library(glmGamPoi)
+library(ggrepel)
+library(mclust)
+library(RColorBrewer)
+```
+
+## Load the data
+
+We will load the example data from the cell ranger output file. See ?Load10X_Spatial for details of how to do this.
+
+```{r}
+# This loads the spatial transcriptomics dataset (10X Genomics Visium format) from the specified folder path (data/slide1_WTM) into a Seurat object named slide1.
+
+slide1 <- Load10X_Spatial(
+  "data/slide1_WTM"
+  )
+```
+
+## Examine the Seurat object
+
+```{r}
+# 32285 features: likely genes or transcripts.
+
+# 2072 samples: spatial spots (capture locations on the tissue).
+
+# 1 assay: named "Spatial".
+
+# Counts layer: raw gene expression counts.
+
+slide1
+
+# Show all the spots and the image
+# 1 spatial field of view: the Visium slide contains one tissue section (slice1). Each red dot corresponds to a spatial spot (gene expression capture location).
+
+# The underlying histology image shows tissue morphology.
+
+# The plot is color-coded by the default ident field (SeuratProject), with all dots the same color as clusters or conditions haven't been set.
+
+SpatialDimPlot(slide1) + NoLegend()
+
+
+```
+
+## Add the expert annotations
+
+This is an example of expert way to proceed.
+
+```{r}
+# Read in the csv file
+annotations <- read.csv("data/slide1_WTM/GP_features_1_Slide_1_A_WTM_Results_GP_ann.csv")
+
+# Loads expert-provided annotations for spatial spots.
+
+# Each row links a spot barcode to a biological region/label (e.g., "chondrocytes", "perichondral")
+
+# For each spot in the growth plate we have an expert annotation
+
+head(annotations)
+# First image shows the CSV loaded and viewed (head(annotations)).
+
+# Corrects typos and ensures consistent category labels for grouping
+# Clean, consistent labels are critical for grouping and visualization.
+annotations <- annotations %>% mutate(GP=case_when(
+  GP == "chondrocytes" ~ "chondrocyte",
+  GP == "chondrocytes" ~ "chondrocyte",
+  GP %in% c("pre-osteo","pre-osteoblasr") ~ "pre-osteoblast",
+  GP == "secondary hypertophic" ~ "secondary hypertrophic",
+  .default =  GP
+))
+
+# Adds the Expert_Annotation column to slide1 Seurat object's metadata, associating each spatial spot with an expert-labeled tissue category.
+slide1$Expert_Annotation <- annotations$GP
+
+# Plot the expert annotation to check the assignments look sensible
+# Colors spots by Expert_Annotation
+# Second image shows tissue regions labeled with a color legend.
+SpatialDimPlot(slide1, group.by = "Expert_Annotation")
+
+# We can remove all the non-annotated spots (non growth plate).
+# The seurat object stores the spots as columns so we subset to remove those columns where the ExpertAnnotation metadata is blank.
+# There will be a few warnings that we can ignore.
+slide1 <- slide1[, slide1$Expert_Annotation!=""]
+
+# Final image shows a zoomed-in view of the annotated growth plate.
+SpatialDimPlot(slide1, group.by = "Expert_Annotation", pt.size.factor = 3.5) 
+
+```
+
+## Quality Control
+
+```{r}
+### Visualize QC metrics ###
+# Spot-wise variation in RNA/gene counts
+VlnPlot(slide1, features = c("nFeature_Spatial", "nCount_Spatial"), ncol = 2)
+
+# Interpretation:
+# Most spots have ~1500–4000 detected genes and ~2000–10000 UMIs.
+
+# Some outliers with very low or very high counts might be low-quality (e.g., dead cells or ambient RNA).
+
+# This visualization helps set thresholds for filtering poor-quality spots.
+
+
+### Scatter Plot for QC ###
+# Assess data consistency
+# Strong positive correlation (r = 0.97)
+FeatureScatter(slide1, feature1 = "nCount_Spatial", feature2 = "nFeature_Spatial")+ NoLegend()
+
+#  Interpretation:
+
+# A high correlation (0.97) suggests that most spots behave as expected — higher total RNA counts come with higher gene diversity.
+
+# Any spots far off the trendline may be technical outliers and candidates for filtering.
+
+```
+
+## Normalise
+
+Normalize data using SCTransform
+
+```{r}
+# Function: Normalizes spatial transcriptomics data using SCTransform().
+# Assay: 	"Spatial"
+# Output: Normalized and variance-stabilized data stored in the Seurat object.
+# verbose: The function will run quietly without printing progress messages.
+slide1 <- SCTransform(slide1, assay = "Spatial", verbose = FALSE)
+
+```
+
+## Cluster
+
+-   **Provided code uses SCT assay for PCA**, improving dimensionality reduction accuracy.
+
+-   Adds **titles** for figure clarity (important for poster figures).
+
+```{r}
+slide1 <- RunPCA(slide1, assay = "SCT", verbose = FALSE)
+# Function: PCA on SCT data
+# Purpose: Reduce dimensionality
+
+slide1 <- FindNeighbors(slide1, dims = 1:30)
+# Function: SNN graph
+# Purpose: Measure similarity
+
+slide1 <- FindClusters(slide1, resolution = 1)
+# Function: Louvain clustering
+# Purpose: Discover expression-based groups
+
+slide1 <- RunUMAP(slide1, dims = 1:30)
+# Function: UMAP layout
+# Purpose: Visualize in 2D
+
+
+# Rename the identity class
+slide1$cluster <- slide1$seurat_clusters  # or however ident is stored
+
+# Set cluster as the identity
+Idents(slide1) <- "cluster"
+
+
+p2 <- SpatialDimPlot(slide1, label = FALSE, group.by = "cluster") + ggtitle("Automated Clusters") + labs(color = "cluster")
+
+p2
+# Function: Spatial plot
+# Purpose: Show clusters on tissue
+
+### Output Interpretation ###
+
+# Spatial spots are color-coded by cluster (ident values 0 to 4).
+
+# Labels are added on top of each spatially coherent region.
+
+# The clusters align with biological tissue regions, but were generated without using expert annotation (purely expression-driven)
+```
+
+## Find Deferentially expressed genes between regions:
+
+-   **Provided code:** Compares **expert-annotated regions**, which is **biologically meaningful** for your project.
+
+```{r}
+# Find markers for all  Expert_Annotation clusters.
+degs <- FindAllMarkers(slide1, group.by = "Expert_Annotation") # It defines cluster-specific marker genes in ST data, identifying genes highly expressed in distinct spatial areas or cell types.(Wang et al. 2025).
+
+# To ignore the suffixes for gene.
+#degs$gene_base <- sub("\\.\\d+$", "", degs$gene)
+# head(degs)
+# Finds genes that define each expert-annotated tissue zone
+# A data.frame with DEGs for each Expert_Annotation label
+# Identifying spatial markers for plotting or poster figures
+```
+
+## Plot marker genes:
+
+-   **Provided code focuses on specific biologically relevant genes** related to your research question.
+
+```{r}
+############################################## As per instruction on you on all
+
+# Find markers for all  automated clusters.
+deg_all <- FindAllMarkers(slide1)
+
+genes_of_interest_Primary <- c("Prg4", "Col10a1")
+genes_of_interest_Secondary <- c("Acan","Sox9")
+# Define genes to visualize
+SpatialFeaturePlot(slide1, features = genes_of_interest_Primary) # Among top five in clusters.
+SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th and 21st rank in clusters, and coexpressed with eachother.
+
+# Map expression of each gene onto the tissue
+
+### Left plot: Prg4 ###
+# Localized expression near the outer edges of both tissue regions.
+
+# Likely marking superficial zones, such as articular cartilage surfaces.
+
+# Boundary lubrication is particularly important for the protection and maintenance of the articular surface, which unfortunately often becomes roughened and eroded in aging and arthritis, with the eventual development of pain and dysfunction(Pawlak et al. 2019) and (Matsushita and Tanaka 2017).
+
+### Right plot: Col10a1 ###
+# High expression in the central/lower zones of both tissue lobes.
+
+# This gene is a known marker of hypertrophic chondrocytes, suggesting that these spots represent maturing cartilage regions.
+
+# The type X collagen gene (COL10A1) is specifically expressed in chondrocytes undergoing hypertrophy, which is an essential late stage of endochondral ossification during the development of long bones(Han et al. 2024).
+
+# This information of Col10a1 is validated in mouse developmental study(Limpach and Kappen 2006).
+
+# 
+
+# **Prg4 expression**:
+  # Localized to the superficial zone of articular cartilage.
+  # Contributes critically to boundary lubrication and cartilage homeostasis.
+  # Matches the user-described position near tissue edges.
+
+# **Col10a1**:
+  # Specific marker of hypertrophic chondrocytes in deeper and central cartilage zones.
+  # Marks maturing cartilage regions linked to ossification and pathologies like osteoarthritis.
+
+# **Modern spatial transcriptomics and advanced clustering methods**:
+  # Enable identification and biological interpretation of spatial gene expression patterns.
+  # Facilitate more precise understanding of cartilage biology and disease mechanisms.
+
+```
+
+## Compare the expert annotations to the clustering results:
+
+-   **Provided code compares automated clusters with expert annotations**, a key requirement for your **poster assignment**.
+
+    ```{r}
+    # Plot Spatially Variable Genes
+    selected_genes <- c("Prg4", "Col2a1", "Sox9", "Acan")# These genes are prior biological knowledge driven.
+    # To ignore the suffixes for gene.
+    degs$gene_base <- sub("\\.\\d+$", "", degs$gene)
+    feature_plots <- SpatialFeaturePlot(slide1, features = selected_genes)
+
+    # Sox9 prevents chondrocyte dedifferentiation and plays a pivotal role in safeguarding cartilage integrity postnatally.
+    # Acan (aggrecan) encodes a large extracellular matrix proteoglycan vital for cartilage structure, providing resistance to compressive forces
+
+
+    ## **Selecting genes for spatial feature plots**:
+      # **Prg4**: Highlights superficial cartilage zones.
+      # **Col2a1 and Acan**: Highlight cartilage matrix.
+      # **Sox9**: Highlights chondrocyte differentiation regulators. (Han et al. 2024) (Limpach and Kappen 2006)
+
+    ## **Clustering of spatial transcriptomics data**:
+      # Aligns with expert anatomical annotations.
+      # Reflects biological processes like cartilage formation, differentiation, and maintenance.
+      # Supports interpretation based on gene expression patterns of Sox9 and Acan(Haseeb et al. 2021)(“SOX9 Binds” 2005).
+
+
+    # Compare Expert Annotations with Automated Clusters
+
+    ##p1 <- SpatialDimPlot(slide1, group.by = "Expert_Annotation", label = FALSE) + ggtitle("Expert Annotations")# old ## BEST p1
+
+    # Ensure factor with correct levels
+    slide1$Expert_Annotation <- factor(slide1$Expert_Annotation)
+    annots <- levels(slide1$Expert_Annotation)
+    annot_colors <- setNames(RColorBrewer::brewer.pal(n = length(annots), "Set3"), annots)
+
+    # Expert Annotations with larger legend
+    p1 <- SpatialDimPlot(slide1, 
+                         group.by = "Expert_Annotation", 
+                         label = FALSE, 
+                         pt.size.factor = 3) +
+      scale_fill_manual(values = annot_colors) +  # <-- use fill, not color
+      guides(fill = guide_legend(override.aes = list(size = 3))) +  # <-- update this too
+      ggtitle("Expert Annotations") +
+      theme(legend.text = element_text(size = 14),
+            legend.title = element_text(size = 15))
+
+
+    # Visualizes manual biological labels
+
+    # Rename the identity class
+    slide1$cluster <- slide1$seurat_clusters  # or however ident is stored
+
+    # Set cluster as the identity
+    Idents(slide1) <- "cluster"
+
+
+    ##p2 <- SpatialDimPlot(slide1, label = FALSE, group.by = "cluster") + ggtitle("Automated Clusters") + labs(color = "cluster")# old ##
+
+    # Ensure the cluster identity is a factor with levels
+    slide1$cluster <- factor(slide1$seurat_clusters)
+    Idents(slide1) <- "cluster"  # Set identity (optional but good practice)
+
+    # Get the actual levels of the clusters
+    clusters <- levels(slide1$cluster)
+
+    # Create a named color palette (Set3 supports up to 12)
+    #library(RColorBrewer)
+    cluster_colors <- setNames(RColorBrewer::brewer.pal(n = length(clusters), "Set3"), clusters)
+    # Automated Clusters with larger legend
+    p2 <- SpatialDimPlot(slide1, 
+                         group.by = "cluster", 
+                         label = FALSE, 
+                         pt.size.factor = 3) +
+      scale_fill_manual(values = cluster_colors) +  # use 'fill' not 'color'
+      guides(fill = guide_legend(override.aes = list(size = 3))) +  # bigger legend dots
+      ggtitle("Automated Clusters") +
+      labs(fill = "cluster") +  # set legend title
+      theme(
+        legend.text = element_text(size = 14),  # larger font in legend
+        legend.title = element_text(size = 15)
+      )
+
+    # Visualizes clusters from unsupervised learning
+
+    # Side-by-side comparison of expert knowledge vs algorithmic output
+
+
+
+    # Ensure factor format
+    expert_labels <- as.factor(slide1$Expert_Annotation)
+    auto_labels <- as.factor(slide1$seurat_clusters)
+
+
+    # Compute ARI
+    ari_score <- adjustedRandIndex(slide1$seurat_clusters, slide1$Expert_Annotation)
+    print(paste("Adjusted Rand Index:", round(ari_score, 3)))# It measures the correspondence between clusters and known spatial structures, cell types, or reference labels from Expert annotations(Li et al. 2021).
+
+
+    # Side-by-side comparison
+    combined_plot <- p1 + p2
+    combined_plot
+    ```
+
+**Export Figures**
+
+-   **Provided code explicitly saves figures** for use in my **poster presentation**.
+
+```{r}
+# Export Figures for Poster
+ggsave("results/figures/Expert_vs_Automated_Clusters.png", plot = combined_plot, width = 12, height = 6, dpi = 300)
+#  It saves the current or specified plot as a PNG file, combining expert and automated cluster plots. It also controls figure size and resolution.
+
+ggsave("results/figures/Selected_Marker_Spatial_Features.png", plot = feature_plots, width = 10, height = 8, dpi = 300)
+
+# This assumes `degs` was generated via:
+# degs <- FindAllMarkers(slide1, group.by = "Expert_Annotation")
+
+# Add gene names and significance flag
+degs <- degs %>%
+  mutate(gene = rownames(.),
+         sig = ifelse(p_val_adj < 0.05 & abs(avg_log2FC) > 0.5, "Significant", "Not Significant"))
+
+# Get all unique clusters
+clusters <- unique(degs$cluster)
+
+# Create a named list to store plots
+volcano_plots <- list()
+
+# Loop over each cluster
+for (clust in clusters) {
+  
+  # Subset DEGs for the current cluster
+  cluster_deg <- degs %>% filter(cluster == clust)
+  
+  # Select top 5 significant genes
+  top_genes <- cluster_deg %>%
+    filter(sig == "Significant") %>%
+    arrange(p_val_adj) %>%
+    slice_head(n = 5) # 21st rank of Acan genes in pre-osteoblast cluster and 11th rank of Acan genes in pre-hypertrophic cluster.
+  
+  # Make volcano plot
+  p <- ggplot(cluster_deg, aes(x = avg_log2FC, y = -log10(p_val_adj), color = sig)) +
+    geom_point() +
+    geom_text_repel(data = top_genes, aes(label = gene_base), size = 3.5, max.overlaps = 1000) +
+    scale_color_manual(values = c("grey", "red")) +
+    theme_minimal() +
+    labs(title = paste("Volcano Plot:", clust),
+         x = "log2 Fold Change",
+         y = "-log10 Adjusted P-value")
+  
+  # Store the plot
+  volcano_plots[[clust]] <- p
+}
+
+# View plot for "pre-hypertrophic", "hypertrophic", "superficial"
+
+# Save to file
+ggsave("results/figures/volcano_pre-hypertrophic.png", plot = volcano_plots[["pre-hypertrophic"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["pre-hypertrophic"]])
+
+# View plot for "hypertrophic"
+
+# Save to file
+ggsave("results/figures/volcano_hypertrophic.png", plot = volcano_plots[["hypertrophic"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["hypertrophic"]])
+
+# View plot for "superficial"
+
+# Save to file
+ggsave("results/figures/volcano_superficial.png", plot = volcano_plots[["superficial"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["superficial"]])
+
+# Save to file
+ggsave("results/figures/volcano_pre-osteoblast.png", plot = volcano_plots[["pre-osteoblast"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["pre-osteoblast"]])
+
+pdf("results/figures/All_Cluster_Volcano_Plots.pdf", width = 6, height = 5)
+for (p in volcano_plots) {
+  print(p)
+}
+dev.off()
+```

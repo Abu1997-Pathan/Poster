@@ -1,0 +1,9 @@
+dplyr
+ggplot2
+patchwork
+Seurat
+hdf5r
+glmGamPoi
+mclust
+xfun
+mclust
