@@ -137,11 +137,9 @@ SpatialDimPlot(slide1, group.by = "Expert_Annotation", pt.size.factor = 3.5)
 VlnPlot(slide1, features = c("nFeature_Spatial", "nCount_Spatial"), ncol = 2)
 
 # Interpretation:
-# Most spots have ~1500–4000 detected genes and ~2000–10000 UMIs.
 
 # Some outliers with very low or very high counts might be low-quality (e.g., dead cells or ambient RNA).
 
-# This visualization helps set thresholds for filtering poor-quality spots.
 
 
 ### Scatter Plot for QC ###
@@ -191,7 +189,7 @@ slide1 <- FindClusters(slide1, resolution = 1)
 
 slide1 <- RunUMAP(slide1, dims = 1:30)
 # Function: UMAP layout
-# Purpose: Visualize in 2D
+# Purpose: Visualise in 2D
 
 
 # Rename the identity class
@@ -209,14 +207,14 @@ p2
 
 ### Output Interpretation ###
 
-# Spatial spots are color-coded by cluster (ident values 0 to 4).
+# Spatial spots are colour-coded by cluster (ident values 0 to 4).
 
 # Labels are added on top of each spatially coherent region.
 
 # The clusters align with biological tissue regions, but were generated without using expert annotation (purely expression-driven)
 ```
 
-## Find Deferentially expressed genes between regions:
+## Find Differentially expressed genes between regions:
 
 -   **Provided code:** Compares **expert-annotated regions**, which is **biologically meaningful** for your project.
 
@@ -237,49 +235,49 @@ degs <- FindAllMarkers(slide1, group.by = "Expert_Annotation") # It defines clus
 -   **Provided code focuses on specific biologically relevant genes** related to your research question.
 
 ```{r}
-############################################## As per instruction on you on all
+
 
 # Find markers for all  automated clusters.
 deg_all <- FindAllMarkers(slide1)
 
 genes_of_interest_Primary <- c("Prg4", "Col10a1")
 genes_of_interest_Secondary <- c("Acan","Sox9")
-# Define genes to visualize
-SpatialFeaturePlot(slide1, features = genes_of_interest_Primary) # Among top five in clusters.
-SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th and 21st rank in clusters, and coexpressed with eachother.
+# Define genes to visualise
+SpatialFeaturePlot(slide1, features = genes_of_interest_Primary) # Among the top five in clusters.
+SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among the 11th and 21st rank in clusters, and coexpressed with each other.
 
 # Map expression of each gene onto the tissue
 
 ### Left plot: Prg4 ###
-# Localized expression near the outer edges of both tissue regions.
+# Localised expression near the outer edges of both tissue regions.
 
 # Likely marking superficial zones, such as articular cartilage surfaces.
 
-# Boundary lubrication is particularly important for the protection and maintenance of the articular surface, which unfortunately often becomes roughened and eroded in aging and arthritis, with the eventual development of pain and dysfunction(Pawlak et al. 2019) and (Matsushita and Tanaka 2017).
+# Boundary lubrication is vital for the protection and maintenance of the articular surface, which unfortunately often becomes roughened and eroded in ageing and arthritis, with the eventual development of pain and dysfunction(Pawlak et al. 2019) and (Matsushita and Tanaka 2017).
 
 ### Right plot: Col10a1 ###
 # High expression in the central/lower zones of both tissue lobes.
 
 # This gene is a known marker of hypertrophic chondrocytes, suggesting that these spots represent maturing cartilage regions.
 
-# The type X collagen gene (COL10A1) is specifically expressed in chondrocytes undergoing hypertrophy, which is an essential late stage of endochondral ossification during the development of long bones(Han et al. 2024).
+# The type X collagen gene (COL10A1) is expressed explicitly in chondrocytes undergoing hypertrophy, an essential late stage of endochondral ossification during the development of long bones(Han et al. 2024).
 
 # This information of Col10a1 is validated in mouse developmental study(Limpach and Kappen 2006).
 
 # 
 
 # **Prg4 expression**:
-  # Localized to the superficial zone of articular cartilage.
-  # Contributes critically to boundary lubrication and cartilage homeostasis.
+  # Localised to the superficial zone of articular cartilage.
+  # Contributes critically to boundary lubrication and cartilage homeostasis (Pawlak et al. 2019) and (Matsushita and Tanaka 2017).
   # Matches the user-described position near tissue edges.
 
 # **Col10a1**:
   # Specific marker of hypertrophic chondrocytes in deeper and central cartilage zones.
-  # Marks maturing cartilage regions linked to ossification and pathologies like osteoarthritis.
+  # Marks' maturing cartilage regions are linked to ossification and pathologies like osteoarthritis (Han et al. 2024).
 
 # **Modern spatial transcriptomics and advanced clustering methods**:
   # Enable identification and biological interpretation of spatial gene expression patterns.
-  # Facilitate more precise understanding of cartilage biology and disease mechanisms.
+  # Facilitate a more precise understanding of cartilage biology and disease mechanisms.
 
 ```
 
@@ -294,8 +292,8 @@ SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th 
     degs$gene_base <- sub("\\.\\d+$", "", degs$gene)
     feature_plots <- SpatialFeaturePlot(slide1, features = selected_genes)
 
-    # Sox9 prevents chondrocyte dedifferentiation and plays a pivotal role in safeguarding cartilage integrity postnatally.
-    # Acan (aggrecan) encodes a large extracellular matrix proteoglycan vital for cartilage structure, providing resistance to compressive forces
+    # Sox9 prevents chondrocyte dedifferentiation and plays a pivotal role in safeguarding cartilage integrity postnatally (Joyce et al. 2024).
+    # Acan (aggrecan) encodes a large extracellular matrix proteoglycan vital for cartilage structure, providing resistance to compressive forces (Horkay et al. 2024). 
 
 
     ## **Selecting genes for spatial feature plots**:
@@ -311,7 +309,7 @@ SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th 
 
     # Compare Expert Annotations with Automated Clusters
 
-    ##p1 <- SpatialDimPlot(slide1, group.by = "Expert_Annotation", label = FALSE) + ggtitle("Expert Annotations")# old ## BEST p1
+  
 
     # Ensure factor with correct levels
     slide1$Expert_Annotation <- factor(slide1$Expert_Annotation)
@@ -323,14 +321,14 @@ SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th 
                          group.by = "Expert_Annotation", 
                          label = FALSE, 
                          pt.size.factor = 3) +
-      scale_fill_manual(values = annot_colors) +  # <-- use fill, not color
+      scale_fill_manual(values = annot_colors) +  # <-- use fill, not colour
       guides(fill = guide_legend(override.aes = list(size = 3))) +  # <-- update this too
       ggtitle("Expert Annotations") +
       theme(legend.text = element_text(size = 14),
             legend.title = element_text(size = 15))
 
 
-    # Visualizes manual biological labels
+    # Visualises manual biological labels
 
     # Rename the identity class
     slide1$cluster <- slide1$seurat_clusters  # or however ident is stored
@@ -339,7 +337,7 @@ SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th 
     Idents(slide1) <- "cluster"
 
 
-    ##p2 <- SpatialDimPlot(slide1, label = FALSE, group.by = "cluster") + ggtitle("Automated Clusters") + labs(color = "cluster")# old ##
+    
 
     # Ensure the cluster identity is a factor with levels
     slide1$cluster <- factor(slide1$seurat_clusters)
@@ -356,7 +354,7 @@ SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th 
                          group.by = "cluster", 
                          label = FALSE, 
                          pt.size.factor = 3) +
-      scale_fill_manual(values = cluster_colors) +  # use 'fill' not 'color'
+      scale_fill_manual(values = cluster_colors) +  # use 'fill' not 'colour'
       guides(fill = guide_legend(override.aes = list(size = 3))) +  # bigger legend dots
       ggtitle("Automated Clusters") +
       labs(fill = "cluster") +  # set legend title
@@ -365,7 +363,7 @@ SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th 
         legend.title = element_text(size = 15)
       )
 
-    # Visualizes clusters from unsupervised learning
+    # Visualises clusters from unsupervised learning
 
     # Side-by-side comparison of expert knowledge vs algorithmic output
 
@@ -437,7 +435,7 @@ for (clust in clusters) {
   volcano_plots[[clust]] <- p
 }
 
-# View plot for "pre-hypertrophic", "hypertrophic", "superficial"
+# View plot for "pre-hypertrophic", "hypertrophic", "superficial", and "pre-osteoblast".
 
 # Save to file
 ggsave("results/figures/volcano_pre-hypertrophic.png", plot = volcano_plots[["pre-hypertrophic"]], width = 6, height = 5, dpi = 300)
