@@ -1,0 +1,1338 @@
+---
+title: "Spatial Transcriptomics"
+format: html
+editor: visual
+---
+
+# Preparing figure for poster
+
+## Install the libraries if not installed
+
+```{r}
+# Before performing the analysis, this line runs the R script install/install.R, which is likely to contain commands to install the required R packages.
+
+source("install/install.R")
+devtools::install_github("Winnie09/GPTCelltype")
+```
+
+## Load the libraries
+
+```{r}
+
+# Loads the necessary libraries for spatial transcriptomics analysis and visualization:
+
+# Seurat: Core package for single-cell and spatial transcriptomics analysis.
+
+# dplyr: For data manipulation.
+
+# ggplot2: For creating plots.
+
+# patchwork and cowplot: For combining multiple ggplots into one figure (useful for posters).
+
+# ggrepel: Ensures readable gene names on scatter plots.
+
+# mclust: Identify clusters from numeric data.
+
+# glmGamPoi: Speeds up differential expression analysis for large datasets.
+
+# BayesSpace: It is used for spatial clustering of spatial transcriptomics data, particularly from platforms like Visium.
+
+# spatialLIBD: This package gives you spatialCoords() and other Visium spatial tools.
+
+# GPTCelltype: Use of cell annotation.
+
+# RColorBrewer: display all available color palettes
+
+# gridExtra: arranging multiple grid-based plots on a single page
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+library(glmGamPoi)
+library(ggrepel)
+library(mclust)
+library(BayesSpace)
+library(SpatialExperiment)
+library(spatialLIBD)
+library(GPTCelltype)
+library(RColorBrewer)
+library(gridExtra)
+library(GPTCelltype)
+```
+
+## Load the data
+
+We will load the example data from the cellranger output file. See ?Load10X_Spatial for details of how to do this.
+
+```{r}
+# This loads the spatial transcriptomics dataset (10X Genomics Visium format) from the specified folder path (data/slide1_WTM) into a Seurat object named slide1.
+
+slide1 <- Load10X_Spatial(
+  "data/slide1_WTM"
+  )
+```
+
+## Examine the Seurat object
+
+```{r}
+# 32285 features: likely genes or transcripts.
+
+# 2072 samples: spatial spots (capture locations on the tissue).
+
+# 1 assay: named "Spatial".
+
+# Counts layer: raw gene expression counts.
+
+slide1
+
+# Show all the spots and the image
+# 1 spatial field of view: the Visium slide contains one tissue section (slice1). Each red dot corresponds to a spatial spot (gene expression capture location).
+
+# The underlying histology image shows tissue morphology.
+
+# The plot is color-coded by the default ident field (SeuratProject), with all dots the same color as clusters or conditions haven't been set.
+
+SpatialDimPlot(slide1) + NoLegend()
+
+
+```
+
+## Add the expert annotations
+
+This is an example of expert way to proceed.
+
+```{r}
+# Read in the csv file
+annotations <- read.csv("data/slide1_WTM/GP_features_1_Slide_1_A_WTM_Results_GP_ann.csv")
+
+# Loads expert-provided annotations for spatial spots.
+
+# Each row links a spot barcode to a biological region/label (e.g., "chondrocytes", "perichondral")
+
+# For each spot in the growth plate we have an expert annotation
+
+head(annotations)
+# First image shows the CSV loaded and viewed (head(annotations)).
+
+# Corrects typos and ensures consistent category labels for grouping
+# Clean, consistent labels are critical for grouping and visualization.
+annotations <- annotations %>% mutate(GP=case_when(
+  GP == "chondrocytes" ~ "chondrocyte",
+  GP == "chondrocytes" ~ "chondrocyte",
+  GP %in% c("pre-osteo","pre-osteoblasr") ~ "pre-osteoblast",
+  GP == "secondary hypertophic" ~ "secondary hypertrophic",
+  .default =  GP
+))
+
+# Adds the Expert_Annotation column to slide1 Seurat object's metadata, associating each spatial spot with an expert-labeled tissue category.
+slide1$Expert_Annotation <- annotations$GP
+
+# Plot the expert annotation to check the assignments look sensible
+# Colors spots by Expert_Annotation
+# Second image shows tissue regions labeled with a color legend.
+SpatialDimPlot(slide1, group.by = "Expert_Annotation")
+
+# We can remove all the non-annotated spots (non growth plate).
+# The seurat object stores the spots as columns so we subset to remove those columns where the ExpertAnnotation metadata is blank.
+# There will be a few warnings that we can ignore.
+slide1 <- slide1[, slide1$Expert_Annotation!=""]
+
+# Final image shows a zoomed-in view of the annotated growth plate.
+SpatialDimPlot(slide1, group.by = "Expert_Annotation", pt.size.factor = 3.5) 
+
+```
+
+## Quality Control
+
+```{r}
+### Visualize QC metrics ###
+# Spot-wise variation in RNA/gene counts
+VlnPlot(slide1, features = c("nFeature_Spatial", "nCount_Spatial"), ncol = 2)
+
+# Interpretation:
+# Most spots have ~1500–4000 detected genes and ~2000–10000 UMIs.
+
+# Some outliers with very low or very high counts might be low-quality (e.g., dead cells or ambient RNA).
+
+# This visualization helps set thresholds for filtering poor-quality spots.
+
+
+### Scatter Plot for QC ###
+# Assess data consistency
+# Strong positive correlation (r = 0.97)
+FeatureScatter(slide1, feature1 = "nCount_Spatial", feature2 = "nFeature_Spatial")+ NoLegend()
+
+#  Interpretation:
+
+# A high correlation (0.97) suggests that most spots behave as expected — higher total RNA counts come with higher gene diversity.
+
+# Any spots far off the trendline may be technical outliers and candidates for filtering.
+
+```
+
+## Normalise
+
+Normalize data using SCTransform
+
+```{r}
+# Function: Normalizes spatial transcriptomics data using SCTransform().
+# Assay: 	"Spatial"
+# Output: Normalized and variance-stabilized data stored in the Seurat object.
+# verbose: The function will run quietly without printing progress messages.
+slide1 <- SCTransform(slide1, assay = "Spatial", verbose = FALSE)
+
+```
+
+## Cluster
+
+-   **Provided code uses SCT assay for PCA**, improving dimensionality reduction accuracy.
+
+-   Adds **titles** for figure clarity (important for poster figures).
+
+```{r}
+slide1 <- RunPCA(slide1, assay = "SCT", verbose = FALSE)
+# Function: PCA on SCT data
+# Purpose: Reduce dimensionality
+
+slide1 <- FindNeighbors(slide1, dims = 1:30)
+# Function: SNN graph
+# Purpose: Measure similarity
+
+slide1 <- FindClusters(slide1, resolution = 1)
+# Function: Louvain clustering
+# Purpose: Discover expression-based groups
+
+slide1 <- RunUMAP(slide1, dims = 1:30)
+# Function: UMAP layout
+# Purpose: Visualize in 2D
+
+
+# Rename the identity class
+slide1$cluster <- slide1$seurat_clusters  # or however ident is stored
+
+# Set cluster as the identity
+Idents(slide1) <- "cluster"
+
+
+p2 <- SpatialDimPlot(slide1, label = FALSE, group.by = "cluster") + ggtitle("Automated Clusters") + labs(color = "cluster")
+
+p2
+# Function: Spatial plot
+# Purpose: Show clusters on tissue
+
+### Output Interpretation ###
+
+# Spatial spots are color-coded by cluster (ident values 0 to 4).
+
+# Labels are added on top of each spatially coherent region.
+
+# The clusters align with biological tissue regions, but were generated without using expert annotation (purely expression-driven)
+```
+
+## Find Deferentially expressed genes between regions:
+
+-   **Provided code:** Compares **expert-annotated regions**, which is **biologically meaningful** for your project.
+
+```{r}
+# Find markers for all  Expert_Annotation clusters.
+degs <- FindAllMarkers(slide1, group.by = "Expert_Annotation") # It defines cluster-specific marker genes in ST data, identifying genes highly expressed in distinct spatial areas or cell types.(Wang et al. 2025).
+
+# To ignore the suffixes for gene.
+#degs$gene_base <- sub("\\.\\d+$", "", degs$gene)
+# head(degs)
+# Finds genes that define each expert-annotated tissue zone
+# A data.frame with DEGs for each Expert_Annotation label
+# Identifying spatial markers for plotting or poster figures
+```
+
+## Plot marker genes:
+
+-   **Provided code focuses on specific biologically relevant genes** related to your research question.
+
+```{r}
+############################################## As per instruction on you on all
+
+# Find markers for all  automated clusters.
+deg_all <- FindAllMarkers(slide1)
+
+genes_of_interest_Primary <- c("Prg4", "Col10a1")
+genes_of_interest_Secondary <- c("Acan","Sox9")
+# Define genes to visualize
+SpatialFeaturePlot(slide1, features = genes_of_interest_Primary) # Among top five in clusters.
+SpatialFeaturePlot(slide1, features = genes_of_interest_Secondary) # Among 11th and 21st rank in clusters, and coexpressed with eachother.
+
+# Map expression of each gene onto the tissue
+
+### Left plot: Prg4 ###
+# Localized expression near the outer edges of both tissue regions.
+
+# Likely marking superficial zones, such as articular cartilage surfaces.
+
+# Boundary lubrication is particularly important for the protection and maintenance of the articular surface, which unfortunately often becomes roughened and eroded in aging and arthritis, with the eventual development of pain and dysfunction(Pawlak et al. 2019) and (Matsushita and Tanaka 2017).
+
+### Right plot: Col10a1 ###
+# High expression in the central/lower zones of both tissue lobes.
+
+# This gene is a known marker of hypertrophic chondrocytes, suggesting that these spots represent maturing cartilage regions.
+
+# The type X collagen gene (COL10A1) is specifically expressed in chondrocytes undergoing hypertrophy, which is an essential late stage of endochondral ossification during the development of long bones(Han et al. 2024).
+
+# This information of Col10a1 is validated in mouse developmental study(Limpach and Kappen 2006).
+
+# 
+
+# **Prg4 expression**:
+  # Localized to the superficial zone of articular cartilage.
+  # Contributes critically to boundary lubrication and cartilage homeostasis.
+  # Matches the user-described position near tissue edges.
+
+# **Col10a1**:
+  # Specific marker of hypertrophic chondrocytes in deeper and central cartilage zones.
+  # Marks maturing cartilage regions linked to ossification and pathologies like osteoarthritis.
+
+# **Modern spatial transcriptomics and advanced clustering methods**:
+  # Enable identification and biological interpretation of spatial gene expression patterns.
+  # Facilitate more precise understanding of cartilage biology and disease mechanisms.
+
+```
+
+## Compare the expert annotations to the clustering results:
+
+-   **Provided code compares automated clusters with expert annotations**, a key requirement for your **poster assignment**.
+
+    ```{r}
+    # Plot Spatially Variable Genes
+    selected_genes <- c("Prg4", "Col2a1", "Sox9", "Acan")# These genes are prior biological knowledge driven.
+    # To ignore the suffixes for gene.
+    degs$gene_base <- sub("\\.\\d+$", "", degs$gene)
+    feature_plots <- SpatialFeaturePlot(slide1, features = selected_genes)
+
+    # Sox9 prevents chondrocyte dedifferentiation and plays a pivotal role in safeguarding cartilage integrity postnatally.
+    # Acan (aggrecan) encodes a large extracellular matrix proteoglycan vital for cartilage structure, providing resistance to compressive forces
+
+
+    ## **Selecting genes for spatial feature plots**:
+      # **Prg4**: Highlights superficial cartilage zones.
+      # **Col2a1 and Acan**: Highlight cartilage matrix.
+      # **Sox9**: Highlights chondrocyte differentiation regulators. (Han et al. 2024) (Limpach and Kappen 2006)
+
+    ## **Clustering of spatial transcriptomics data**:
+      # Aligns with expert anatomical annotations.
+      # Reflects biological processes like cartilage formation, differentiation, and maintenance.
+      # Supports interpretation based on gene expression patterns of Sox9 and Acan(Haseeb et al. 2021)(“SOX9 Binds” 2005).
+
+
+    # Compare Expert Annotations with Automated Clusters
+
+    ##p1 <- SpatialDimPlot(slide1, group.by = "Expert_Annotation", label = FALSE) + ggtitle("Expert Annotations")# old ## BEST p1
+
+    # Expert Annotations with larger legend
+    p1 <- SpatialDimPlot(slide1, 
+                         group.by = "Expert_Annotation", 
+                         label = FALSE, 
+                         pt.size.factor = 3) + 
+          ggtitle("Expert Annotations") +
+          guides(color = guide_legend(override.aes = list(size = 25))) +  # make legend dots bigger
+          theme(legend.text = element_text(size = 14),# increase legend label font size
+                legend.title = element_text(size = 15))
+
+    # Visualizes manual biological labels
+
+    # Rename the identity class
+    slide1$cluster <- slide1$seurat_clusters  # or however ident is stored
+
+    # Set cluster as the identity
+    Idents(slide1) <- "cluster"
+
+
+    ##p2 <- SpatialDimPlot(slide1, label = FALSE, group.by = "cluster") + ggtitle("Automated Clusters") + labs(color = "cluster")# old ##
+
+    # Automated Clusters with larger legend
+    p2 <- SpatialDimPlot(slide1, 
+                         group.by = "cluster", 
+                         label = FALSE, 
+                         pt.size.factor = 3) + 
+          ggtitle("Automated Clusters") + 
+          labs(color = "cluster") +
+          guides(color = guide_legend(override.aes = list(size = 25))) +  # make legend dots bigger
+          theme(legend.text = element_text(size = 14), # increase legend label font size
+                legend.title = element_text(size = 15))
+    # Visualizes clusters from unsupervised learning
+
+    # Side-by-side comparison of expert knowledge vs algorithmic output
+
+
+
+
+    # Side-by-side comparison
+    combined_plot <- p1 + p2
+    combined_plot
+
+
+
+    ```
+
+```{r}
+
+# Ensure factor with correct levels
+slide1$Expert_Annotation <- factor(slide1$Expert_Annotation)
+annots <- levels(slide1$Expert_Annotation)
+annot_colors <- setNames(RColorBrewer::brewer.pal(n = length(annots), "Set3"), annots)
+
+p1 <- SpatialDimPlot(slide1, 
+                     group.by = "Expert_Annotation", 
+                     label = FALSE, 
+                     pt.size.factor = 3) +
+  scale_fill_manual(values = annot_colors) +  # <-- use fill, not color
+  guides(fill = guide_legend(override.aes = list(size = 4))) +  # <-- update this too
+  ggtitle("Expert Annotations") +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 15))
+
+
+
+p1
+```
+
+cluster_colors \<- setNames(RColorBrewer::brewer.pal(n = length(clusters), "Dark2"), clusters)
+
+p2 \<- SpatialDimPlot(slide1,
+
+group.by = "cluster",
+
+label = FALSE,
+
+pt.size.factor = 3) +
+
+scale_fill_manual(values = cluster_colors) + \# use fill, not color
+
+guides(fill = guide_legend(override.aes = list(size = 6))) +
+
+ggtitle("Automated Clusters") +
+
+labs(fill = "cluster") + \# update legend title (optional)
+
+theme(legend.text = element_text(size = 14),
+
+legend.title = element_text(size = 15))
+
+p2
+
+```{r}
+# Ensure the cluster identity is a factor with levels
+slide1$cluster <- factor(slide1$seurat_clusters)
+Idents(slide1) <- "cluster"  # Set identity (optional but good practice)
+
+# Get the actual levels of the clusters
+clusters <- levels(slide1$cluster)
+
+# Create a named color palette (Set3 supports up to 12)
+library(RColorBrewer)
+cluster_colors <- setNames(RColorBrewer::brewer.pal(n = length(clusters), "Set3"), clusters)
+
+# Generate the plot
+p2 <- SpatialDimPlot(slide1, 
+                     group.by = "cluster", 
+                     label = FALSE, 
+                     pt.size.factor = 3) +
+  scale_fill_manual(values = cluster_colors) +  # use 'fill' not 'color'
+  guides(fill = guide_legend(override.aes = list(size = 4))) +  # bigger legend dots
+  ggtitle("Automated Clusters") +
+  labs(fill = "cluster") +  # set legend title
+  theme(
+    legend.text = element_text(size = 14),  # larger font in legend
+    legend.title = element_text(size = 15)
+  )
+
+# Print the plot
+p2
+
+
+```
+
+```{r}
+    # Compute ARI
+    ari_score <- adjustedRandIndex(slide1$seurat_clusters, slide1$Expert_Annotation)
+    print(paste("Adjusted Rand Index:", round(ari_score, 3)))# It measures the correspondence between clusters and known spatial structures, cell types, or reference labels from Expert annotations(Li et al. 2021).
+
+combined <- p1 + p2
+combined
+```
+
+**Export Figures**
+
+-   **Provided code explicitly saves figures** for use in my **poster presentation**.
+
+```{r}
+# Export Figures for Poster
+ggsave("Expert_vs_Automated_Clusters.png", plot = combined_plot, width = 12, height = 6, dpi = 300)
+#  It saves the current or specified plot as a PNG file, combining expert and automated cluster plots. It also controls figure size and resolution.
+
+ggsave("Selected_Marker_Spatial_Features.png", plot = feature_plots, width = 10, height = 8, dpi = 300)
+
+# This assumes `degs` was generated via:
+# degs <- FindAllMarkers(slide1, group.by = "Expert_Annotation")
+
+# Add gene names and significance flag
+degs <- degs %>%
+  mutate(gene = rownames(.),
+         sig = ifelse(p_val_adj < 0.05 & abs(avg_log2FC) > 0.5, "Significant", "Not Significant"))
+
+# Get all unique clusters
+clusters <- unique(degs$cluster)
+
+# Create a named list to store plots
+volcano_plots <- list()
+
+# Loop over each cluster
+for (clust in clusters) {
+  
+  # Subset DEGs for the current cluster
+  cluster_deg <- degs %>% filter(cluster == clust)
+  
+  # Select top 5 significant genes
+  top_genes <- cluster_deg %>%
+    filter(sig == "Significant") %>%
+    arrange(p_val_adj) %>%
+    slice_head(n = 5) # 21st rank of Acan genes in pre-osteoblast cluster and 11th rank of Acan genes in pre-hypertrophic cluster.
+  
+  # Make volcano plot
+  p <- ggplot(cluster_deg, aes(x = avg_log2FC, y = -log10(p_val_adj), color = sig)) +
+    geom_point() +
+    geom_text_repel(data = top_genes, aes(label = gene_base), size = 3.5, max.overlaps = 1000) +
+    scale_color_manual(values = c("grey", "red")) +
+    theme_minimal() +
+    labs(title = paste("Volcano Plot:", clust),
+         x = "log2 Fold Change",
+         y = "-log10 Adjusted P-value")
+  
+  # Store the plot
+  volcano_plots[[clust]] <- p
+}
+
+# View plot for "pre-hypertrophic", "hypertrophic", "superficial"
+
+# Save to file
+ggsave("volcano_pre-hypertrophic.png", plot = volcano_plots[["pre-hypertrophic"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["pre-hypertrophic"]])
+
+# View plot for "hypertrophic"
+
+# Save to file
+ggsave("volcano_hypertrophic.png", plot = volcano_plots[["hypertrophic"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["hypertrophic"]])
+
+# View plot for "superficial"
+
+# Save to file
+ggsave("volcano_superficial.png", plot = volcano_plots[["superficial"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["superficial"]])
+
+# Save to file
+ggsave("volcano_pre-osteoblast.png", plot = volcano_plots[["pre-osteoblast"]], width = 6, height = 5, dpi = 300)
+
+print(volcano_plots[["pre-osteoblast"]])
+
+pdf("All_Cluster_Volcano_Plots.pdf", width = 6, height = 5)
+for (p in volcano_plots) {
+  print(p)
+}
+dev.off()
+```
+
+**K-Means Clustering\
+**
+
+```{r}
+# Run PCA and k-means
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+set.seed(123)
+kmeans_result <- kmeans(pca_data, centers = 4)
+slide1$kmeans_cluster <- as.factor(kmeans_result$cluster)
+
+# Spatial Plot WITHOUT Cluster Labels
+k_means <- SpatialDimPlot(
+  slide1,
+  group.by = "kmeans_cluster",
+  label = FALSE,               # <-- this disables cluster number labels
+  pt.size.factor = 2.5
+) +
+  scale_color_manual(
+    values = c("darkorchid", "turquoise", "tomato", "springgreen4")
+  ) +
+  ggtitle("k-means Clusters") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+ggsave("K_means Automatic Clustering.png", plot = k_means, width = 10, height = 8, dpi = 300)
+
+k_means
+```
+
+```{r}
+# Run PCA and k-means
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+set.seed(123)
+kmeans_result <- kmeans(pca_data, centers = 4)
+slide1$kmeans_cluster <- factor(kmeans_result$cluster)  # ensure it's a factor
+
+
+
+```
+
+```{r}
+
+# Get cluster levels and assign colors
+kmeans_levels <- levels(slide1$kmeans_cluster)
+kmeans_colors <- setNames(brewer.pal(n = length(kmeans_levels), "Set3"), kmeans_levels)
+
+# Generate spatial plot for k-means clustering
+k_means <- SpatialDimPlot(
+  slide1,
+  group.by = "kmeans_cluster",
+  label = FALSE,
+  pt.size.factor = 3
+) +
+  scale_fill_manual(values = kmeans_colors) +
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("k-means Clusters") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+# Display the plot
+print(k_means)
+
+# Save the plot as a PNG file
+ggsave("K_means_Automatic_Clustering.png", plot = k_means, width = 10, height = 8, dpi = 300)
+
+# Compute Adjusted Rand Index (ARI) against expert annotation
+ari_score <- adjustedRandIndex(slide1$kmeans_cluster, slide1$Expert_Annotation)
+print(paste("Adjusted Rand Index (k-means vs Expert Annotation):", round(ari_score, 3)))
+
+```
+
+```{r}
+p_1 <- p1 + theme(legend.position = "none")
+p_2 <- p2 + theme(legend.position = "none")
+k_Means <-  k_means + theme(legend.position = "none")
+final <- p_1 + p_2 + k_Means
+final 
+```
+
+Single Comparison
+
+```{r}
+
+# Extract PCA embeddings
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+
+# Define color palette for up to 9 clusters
+kmeans_colors <- RColorBrewer::brewer.pal(9, "Set2")
+
+# Expert annotation plots
+p_1 <- SpatialDimPlot(slide1, 
+                     group.by = "Expert_Annotation", 
+                     label = FALSE, 
+                     pt.size.factor = 3) +
+  scale_fill_manual(values = annot_colors) +  # <-- use fill, not color
+  guides(fill = guide_legend(override.aes = list(size = 4))) +  # <-- update this too
+  ggtitle("Expert Annotations") +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 15))
+p_2 <- SpatialDimPlot(slide1, group.by = "seurat_clusters", label = FALSE, pt.size.factor = 3) + scale_fill_manual(values = cluster_colors) +  # use 'fill' not 'color'
+  guides(fill = guide_legend(override.aes = list(size = 4))) +  # bigger legend dots  +
+  ggtitle("Seurat Clusters") + 
+    ggtitle("Expert Annotation") + 
+      labs(fill = "cluster") +  # set legend title
+  theme(
+    legend.text = element_text(size = 14),  # larger font in legend
+    legend.title = element_text(size = 15)
+  )
+
+# Start PDF output
+pdf("All_kmeans_Comparisons.pdf", width = 16, height = 8)
+
+# Loop for k = 2 to 9
+for (k in 2:9) {
+  set.seed(123)
+  kmeans_result <- kmeans(pca_data, centers = k)
+  cluster_column <- paste0("kmeans_k", k)
+  slide1[[cluster_column]] <- as.factor(kmeans_result$cluster)
+
+  # Generate k-means spatial plot
+  k_means <- SpatialDimPlot(
+    slide1,
+    group.by = cluster_column,
+    label = FALSE,
+    pt.size.factor = 2.5
+  ) +
+    scale_fill_manual(values = kmeans_colors[1:k]) +
+    guides(fill = guide_legend(override.aes = list(size = 4))) +
+    ggtitle(paste("k-means Clusters (k =", k, ")")) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 10),
+      legend.position = "none"
+    )
+
+  # Align cluster and expert annotation vectors
+  common_spots <- intersect(rownames(slide1@meta.data), names(slide1$Expert_Annotation))
+  cluster_vector <- as.factor(slide1@meta.data[common_spots, cluster_column])
+  expert_vector  <- as.factor(slide1$Expert_Annotation[common_spots])
+
+  # Compute Adjusted Rand Index (ARI)
+  ari_score <- adjustedRandIndex(as.numeric(cluster_vector), as.numeric(expert_vector))
+  ari_label <- paste("Adjusted Rand Index (k =", k, "vs Expert):", round(ari_score, 3))
+
+  # ARI caption panel
+  ari_text <- ggplot() +
+    annotate("text", x = 0.5, y = 0.5, label = ari_label, size = 6, hjust = 0.5) +
+    theme_void()
+
+  # Combine all into one page
+  top_row <- p_1 + p_2 + k_means + plot_layout(ncol = 3)
+  final_plot <- top_row / ari_text + plot_layout(heights = c(5, 1))
+
+  # Print page to PDF
+  print(final_plot)
+}
+
+# Close PDF
+dev.off()
+```
+
+PLOT ARI vs K-Means\
+
+```{r}
+
+# Extract PCA data (adjust to your embedding if needed)
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+
+# Prepare a list to store ARI scores
+ari_scores <- data.frame(k = integer(), ARI = numeric())
+
+# Loop through k = 2 to 9
+for (k in 2:9) {
+  set.seed(123)
+  kmeans_result <- kmeans(pca_data, centers = k)
+  cluster_column <- paste0("kmeans_k", k)
+  slide1[[cluster_column]] <- as.factor(kmeans_result$cluster)
+
+  # Align cluster and expert annotation vectors
+  common_spots <- intersect(rownames(slide1@meta.data), names(slide1$Expert_Annotation))
+  cluster_vector <- as.factor(slide1@meta.data[common_spots, cluster_column])
+  expert_vector  <- as.factor(slide1$Expert_Annotation[common_spots])
+
+  # Compute ARI
+  ari_score <- adjustedRandIndex(as.numeric(cluster_vector), as.numeric(expert_vector))
+
+  # Store the result
+  ari_scores <- rbind(ari_scores, data.frame(k = k, ARI = ari_score))
+}
+
+# Plot ARI vs k
+ggplot(ari_scores, aes(x = k, y = ARI)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_point(size = 3, color = "red") +
+  labs(
+    title = "ARI between k-means Clusters and Expert Annotation",
+    x = "Number of k-means Clusters (k)",
+    y = "Adjusted Rand Index"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+**Resolution changes in k-means.**
+
+```{r}
+# Define range of k values and dummy resolution values
+k_values <- 2:9
+resolutions <- seq(0.2, 1.2, by = 0.2)
+
+# Convert expert annotations to numeric labels
+true_labels <- as.numeric(as.factor(slide1$Expert_Annotation))
+
+# Extract PCA embeddings from Seurat object
+pca_mat <- Embeddings(slide1[["pca"]])
+
+# Open PDF device for all plots
+pdf("Kmeans_ARI_vs_Resolution_All_K.pdf", width = 7, height = 5)
+
+# Loop through each k
+for (k in k_values) {
+  
+  set.seed(123)  # For reproducibility
+  km <- kmeans(pca_mat, centers = k)
+  
+  # Store k-means clusters in metadata
+  cluster_col <- paste0("kmeans_k", k)
+  slide1@meta.data[[cluster_col]] <- as.factor(km$cluster)
+  
+  # Retrieve predicted labels as numeric
+  pred_labels <- as.numeric(slide1@meta.data[[cluster_col]])
+  
+  # Compute ARI once for this k
+  ari_value <- adjustedRandIndex(true_labels, pred_labels)
+  
+  # Create data frame: constant ARI across dummy resolution axis
+  ari_df <- data.frame(Resolution = resolutions,
+                       ARI = rep(ari_value, length(resolutions)))
+  
+  # Plot
+  p <- ggplot(ari_df, aes(x = Resolution, y = ARI)) +
+    geom_line(color = "blue") +
+    geom_point(color = "red", size = 2) +
+    labs(title = paste("ARI vs Resolution (k =", k, "using K-means)"),
+         x = "Clustering Resolution",
+         y = "ARI with Expert Annotation") +
+    theme_minimal()
+  
+  # Add plot to PDF
+  print(p)
+}
+
+# Close PDF device
+dev.off()
+
+```
+
+**Louvain clustering output of resolution.**
+
+```{r}
+resolutions <- seq(0.2, 1.2, by = 0.2)
+ari_scores <- numeric(length(resolutions))
+true_labels <- as.numeric(as.factor(slide1$Expert_Annotation))
+
+pdf("Seurat_ARI_vs_Resolution.pdf", width = 7, height = 5)
+
+for (res in resolutions) {
+  slide1 <- FindClusters(slide1, resolution = res, verbose = FALSE)
+  pred_labels <- as.numeric(as.factor(slide1$seurat_clusters))
+  ari <- adjustedRandIndex(true_labels, pred_labels)
+  ari_scores[which(resolutions == res)] <- ari
+}
+
+ari_df <- data.frame(Resolution = resolutions, ARI = ari_scores)
+
+p <- ggplot(ari_df, aes(x = Resolution, y = ARI)) +
+  geom_line(color = "blue") +
+  geom_point(color = "red", size = 2) +
+  labs(title = "Resolution vs Adjusted Rand Index (Louvain Clustering)",
+       x = "Clustering Resolution",
+       y = "ARI with Expert Annotation") +
+  theme_minimal()
+
+print(p)
+dev.off()
+
+```
+
+![](images/clipboard-3852324241.png)
+
+**Lets changes the principle component**
+
+```{r}
+# Example: ARI vs Number of PCs (with fixed k)
+pc_range <- seq(5, 30, by = 5)
+k <- 6
+ari_scores <- numeric(length(pc_range))
+
+for (i in seq_along(pc_range)) {
+  pcs <- pc_range[i]
+  pca_mat_subset <- Embeddings(slide1[["pca"]])[, 1:pcs]
+  
+  set.seed(123)
+  km <- kmeans(pca_mat_subset, centers = k)
+  pred_labels <- km$cluster
+  
+  ari_scores[i] <- adjustedRandIndex(true_labels, pred_labels)
+}
+
+# Plot
+plot_df <- data.frame(Num_PCs = pc_range, ARI = ari_scores)
+ggplot(plot_df, aes(x = Num_PCs, y = ARI)) +
+  geom_line(color = "blue") +
+  geom_point(color = "red", size = 2) +
+  labs(title = paste("ARI vs Number of PCs (k =", k, "using K-means)"),
+       x = "Number of Principal Components",
+       y = "ARI with Expert Annotation") +
+  theme_minimal()
+
+```
+
+Varying Clustering Resolution and Comparing with Expert Annotations\
+
+```{r}
+
+
+# Make sure slide1 has PCA already run
+# slide1 <- RunPCA(slide1)  # Uncomment if not already run
+# slide1 <- FindNeighbors(slide1, dims = 1:9)
+
+# Define resolution values to test
+resolutions <- seq(0.2, 1.2, by = 0.2)
+ari_scores <- numeric(length(resolutions))
+
+# Use expert annotations (replace with correct metadata column)
+true_labels <- as.numeric(as.factor(slide1$Expert_Annotation))
+
+# Loop through resolutions and compute ARI
+for (i in seq_along(resolutions)) {
+  res <- resolutions[i]
+  
+  slide1 <- FindClusters(slide1, resolution = res, verbose = FALSE)
+  
+  # Predicted labels
+  pred_labels <- as.numeric(as.factor(slide1$seurat_clusters))
+  
+  # Compute ARI
+  ari_scores[i] <- adjustedRandIndex(true_labels, pred_labels)
+}
+
+# Create DataFrame
+ari_df <- data.frame(Resolution = resolutions, ARI = ari_scores)
+
+# Plot Resolution vs Adjusted Rand Index
+ggplot(ari_df, aes(x = Resolution, y = ARI)) +
+  geom_line(color = "blue") +
+  geom_point(size = 3, color = "red") +
+  ggtitle("Resolution vs Adjusted Rand Index (ARI)") +
+  xlab("Clustering Resolution") +
+  ylab("ARI with Expert Annotation") +
+  theme_minimal(base_size = 14)
+
+
+```
+
+\
+Repeat ARI Evaluation for k-means (k = 2 to 9)\
+
+```{r}
+# Prepare storage
+ks <- 2:9
+ari_kmeans <- numeric(length(ks))
+
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+true_labels <- as.numeric(as.factor(slide1$Expert_Annotation))
+
+for (i in seq_along(ks)) {
+  set.seed(123)
+  k <- ks[i]
+  km <- kmeans(pca_data, centers = k)
+  ari_kmeans[i] <- adjustedRandIndex(true_labels, km$cluster)
+}
+
+```
+
+Combine and Plot Both Comparisons\
+
+```{r}
+# Combine data
+df_res <- data.frame(Method = "Seurat Resolution", x = resolutions, ARI = ari_scores)
+df_k <- data.frame(Method = "K-means", x = ks, ARI = ari_kmeans)
+combined_df <- rbind(df_res, df_k)
+
+# Plot
+ggplot(combined_df, aes(x = x, y = ARI, color = Method)) +
+  geom_line() +
+  geom_point(size = 3) +
+  labs(x = "Resolution / k", y = "Adjusted Rand Index", 
+       title = "ARI: Seurat (resolution) vs K-means (k)") +
+  theme_minimal(base_size = 14)
+
+```
+
+**GMM-based clustering**
+
+```{r}
+
+# Step 1: Extract first 9 PCs
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+
+# Step 2: Apply Gaussian Mixture Model (GMM)
+gmm_model <- Mclust(pca_data)
+
+# Step 3: Store cluster labels in metadata
+slide1$GMM_cluster <- as.factor(gmm_model$classification)
+
+# Step 4: Convert labels for ARI computation
+true_labels <- as.numeric(as.factor(slide1$Expert_Annotation))
+pred_labels <- as.numeric(slide1$GMM_cluster)
+
+# Step 5: Compute ARI
+gmm_ari <- adjustedRandIndex(true_labels, pred_labels)
+
+# Output result
+cat("ARI between GMM clusters and expert annotation:", gmm_ari, "\n")
+
+SpatialDimPlot(slide1, group.by = "GMM_cluster", label = FALSE,
+  pt.size.factor = 3) +
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("Automated GMM Clusters") +
+  labs(fill = "Cluster") +
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+
+```
+
+**BayesSpace Clustering Methods\
+**
+
+```{r}
+
+# Extract components
+counts <- GetAssayData(slide1, slot = "counts")
+metadata <- slide1@meta.data
+coords <- GetTissueCoordinates(slide1)
+
+# Keep only spots present in all pieces
+common <- intersect(colnames(counts), rownames(coords))
+
+# Subset everything
+counts <- counts[, common]
+metadata <- metadata[common, , drop = FALSE]
+coords <- coords[common, c("x", "y")]
+
+# Create SpatialExperiment object
+spe <- SpatialExperiment::SpatialExperiment(
+  assays = list(counts = counts),
+  colData = metadata,
+  spatialCoords = as.matrix(coords)
+)
+
+# Clean spatial coords
+colnames(spatialCoords(spe)) <- c("row", "col")
+
+```
+
+![](images/clipboard-511539195.png)
+
+```{r}
+library(BayesSpace)
+
+# library(BayesSpace) My earlier try.
+
+#spe <- spatialPreprocess(spe, platform = "Visium", log.normalize = TRUE)
+#spe <- spatialCluster(spe, q = 4, platform = "Visium")
+
+
+# Run PCA on log-normalized counts manually
+
+# The only thing failing is BayesSpace::spatialCluster() due to internal platform-specific metadata checks
+spe <- spatialPreprocess(spe, platform = NULL, log.normalize = TRUE)
+
+# Get PCA embeddings
+pca_mat <- reducedDim(spe, "PCA")
+
+# Try manual k-means to test if inputs are valid
+km <- kmeans(pca_mat, centers = 4)
+head(km$cluster)
+
+# Add k-means clusters to Seurat object
+slide1$BayesSpace_kmeans <- factor(km$cluster)
+
+# Visualize
+SpatialDimPlot(slide1, group.by = "BayesSpace_kmeans", label = FALSE, pt.size.factor = 3)+  # use 'fill' not 'color'
+  guides(fill = guide_legend(override.aes = list(size = 4))) +  # bigger legend dots
+  ggtitle("Automated GMM_Clusters") +
+  labs(fill = "cluster") +  # set legend title
+  theme(
+    legend.text = element_text(size = 14),  # larger font in legend
+    legend.title = element_text(size = 15)
+  ) +
+  ggtitle("BayesSpace PCA + k-means Clustering")
+
+
+
+
+ari <- adjustedRandIndex(slide1$Expert_Annotation, slide1$BayesSpace_kmeans)
+print(paste("ARI vs Expert Annotation:", round(ari, 3)))
+
+```
+
+**Mclust (Gaussian mixture model)**
+
+```{r}
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+gmm <- Mclust(pca_data)
+slide1$GMM_cluster <- factor(gmm$classification)
+adjustedRandIndex(slide1$Expert_Annotation, gmm$classification)
+```
+
+**Hierarchical Clustering + SpatialDimPlot + ARI**
+
+```{r}
+# Ensure PCA is run
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+
+# Run hierarchical clustering
+hc <- hclust(dist(pca_data))
+cut <- cutree(hc, k = 4)
+
+# Assign cluster results to Seurat object
+slide1$HClust_cluster <- factor(cut)
+
+# Compute ARI vs expert annotation
+hclust_ari <- adjustedRandIndex(as.numeric(slide1$Expert_Annotation), as.numeric(slide1$HClust_cluster))
+
+# Output result
+cat("ARI between HClust clusters and expert annotation:", round(hclust_ari, 3), "\n")
+
+# Plot SpatialDimPlot using HClust_cluster
+SpatialDimPlot(slide1, group.by = "HClust_cluster", label = FALSE, pt.size.factor = 3) +
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("Automated HClust Clusters") +
+  labs(fill = "Cluster") +
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+
+```
+
+**Run GPTCelltype for Cluster Annotation**
+
+**Extract marker genes**
+
+```{r}
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+km_res <- kmeans(pca_data, centers = 4)
+slide1$kmeans_k4 <- as.factor(km_res$cluster)
+head(slide1$kmeans_k4)
+
+markers <- FindAllMarkers(slide1, group.by = "kmeans_k4", only.pos = TRUE)
+top_markers <- markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+marker_list <- split(top_markers$gene, top_markers$cluster)
+```
+
+**Use GPTCelltype**
+
+```{r}
+# Install and load required packages
+if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
+remotes::install_github("Winnie09/GPTCelltype")
+
+# Extract PCA matrix
+pca_data <- Embeddings(slide1, "pca")[, 1:9]
+
+# Define k-values
+k_values <- 2:9
+
+# Expert cell type annotations for k = 2 to 9
+expert_annotations <- list(
+  `2` = c("Osteoblasts / Mesenchymal stem cells", "Chondrocytes / Myocytes"),
+  `3` = c("Myocytes", "Tenocytes / Fibroblasts", "Osteoclasts / MSCs"),
+  `4` = c("Hypertrophic chondrocytes", "Chondrocytes / Myocytes", "Osteoclasts / Monocytes", "Osteoblasts"),
+  `5` = c("Hypertrophic chondrocytes", "Chondrocytes / Myocytes", "Osteoclasts / Monocytes", "Osteoblasts", "Tenocytes / Fibroblasts"),
+  `6` = c("Hypertrophic chondrocytes", "Myocytes / Chondrocytes", "Osteoblasts / Bone lining cells", "Osteoblasts", "Tenocytes / Fibroblasts", "Osteoclasts / Monocytes"),
+  `7` = c("Hypertrophic chondrocytes", "Myocytes", "Chondrocytes", "Tenocytes / Fibroblasts", "Osteoblasts / Bone lining cells", "Osteoclasts / Monocytes", "Osteoblasts"),
+  `8` = c("Pre-hypertrophic chondrocytes", "Myocytes", "Chondrocytes", "Tenocytes / Fibroblasts", "Osteoblasts / Bone lining cells", "Osteoclasts / Monocytes", "Osteoblasts", "Hypertrophic chondrocytes"),
+  `9` = c("Pre-hypertrophic chondrocytes", "Chondrocytes", "Hypertrophic chondrocytes", "Osteoblasts", "Tenocytes / Fibroblasts", "Macrophages / Monocytes", "Osteoclasts", "Osteoblasts / Bone lining cells", "Myocytes")
+)
+
+# PDF output
+pdf("Full_Cluster_Annotations_KMeans_2_to_9.pdf", width = 8, height = 6)
+
+# Store GPT prompts
+gpt_prompts <- list()
+
+for (k in k_values) {
+  set.seed(123)
+  kmeans_result <- kmeans(pca_data, centers = k)
+
+  cluster_col <- paste0("kmeans_k", k)
+  celltype_col <- paste0("celltype_k", k)
+
+  # Save clustering to metadata
+  slide1@meta.data[[cluster_col]] <- as.factor(kmeans_result$cluster)
+
+  # Apply expert annotation
+  annotations <- expert_annotations[[as.character(k)]]
+  slide1@meta.data[[celltype_col]] <- factor(annotations[as.numeric(slide1@meta.data[[cluster_col]])])
+
+  # Plot spatial annotation
+  plot <- SpatialDimPlot(slide1, group.by = celltype_col, label = FALSE, pt.size.factor = 2.5) +
+    ggtitle(paste("KMeans_k", k, "Cluster Annotation")) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 10)
+    )
+  print(plot)
+
+  # Marker identification + GPTCelltype annotation prompt
+  Idents(slide1) <- cluster_col
+  markers <- FindAllMarkers(slide1, group.by = cluster_col, only.pos = TRUE)
+
+  # Disable GPT API call, only get the prompt
+  Sys.setenv(OPENAI_API_KEY = "")
+  prompt <- gptcelltype(
+    input = markers,
+    tissuename = "mouse bone",
+    model = "gpt-4"
+  )
+  gpt_prompts[[paste0("k", k)]] <- prompt
+}
+
+dev.off()
+
+# Display all prompts
+for (k in names(gpt_prompts)) {
+  cat("\n\n====== GPT Prompt for k =", k, "======\n")
+  cat(gpt_prompts[[k]])
+  cat("\n\n")
+}
+
+```
+
+Dim-plot using
+
+```{r}
+
+# Assign cell types to Seurat object
+#slide1$celltype <- factor(c(
+#  "Articular chondrocytes",
+#  "Skeletal muscle cells",
+#  "Mesenchymal stem/progenitor cells",
+#  "Osteoblasts",
+#  "Hypertrophic chondrocytes",
+#  "Immune-like cells",
+#  "Fibrocartilage-like cells",
+#  "Growth plate chondrocytes"
+#)[slide1$kmeans_k4])
+
+slide1$celltype <- factor(
+  c("perichondral", "pre-osteoblast", "superficial", "proliferative", 
+    "pre-hypertrophic", "hypertrophic", "secondary hypertrophic", "canal","chondrocyte")[slide1$kmeans_k4]
+)
+
+
+# Plot with customized legend
+SpatialDimPlot(slide1, group.by = "celltype", label = FALSE, pt.size.factor = 3) +
+  guides(fill = guide_legend(override.aes = list(size = 4))) +  # bigger dots in legend
+  ggtitle("kmeans_k4 ChatGPT_Clusters") +
+  labs(fill = "Cluster") +  # legend title
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+```
+
+**Run k-means clustering with k = 8**
+
+```{r}
+# Step 1: Run k-means clustering with k = 8 (if not already run)
+pca_mat <- Embeddings(slide1[["pca"]])
+set.seed(123)
+km8 <- kmeans(pca_mat, centers = 8)
+slide1$kmeans_k8 <- as.factor(km8$cluster)
+
+# Step 2: Assign cell types (replace labels below as needed based on biological knowledge or GPTCelltype output)
+slide1$celltype_k8 <- factor(c(
+  "Articular chondrocytes",         # cluster 1
+  "Skeletal muscle cells",          # cluster 2
+  "Mesenchymal stem/progenitor cells",  # cluster 3
+  "Osteoblasts",                    # cluster 4
+  "Hypertrophic chondrocytes",     # cluster 5
+  "Immune-like cells",             # cluster 6
+  "Fibrocartilage-like cells",     # cluster 7
+  "Growth plate chondrocytes"      # cluster 8
+)[slide1$kmeans_k8])
+
+# Step 3: Plot the results with enhanced legend formatting
+SpatialDimPlot(slide1, group.by = "celltype_k8", label = FALSE, pt.size.factor = 3) +
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("KMeans_k8 Cluster Annotation") +
+  labs(fill = "Cell Type") +
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+
+
+
+```
+
+```{r}
+
+
+# Visualize clustering results
+p1 <- SpatialDimPlot(slide1, group.by = "BayesSpace_kmeans", label = FALSE, pt.size.factor = 3) + 
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("BayesSpace Clustering") +
+  labs(fill = "Cell Type") +
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+
+p2 <- SpatialDimPlot(slide1, group.by = "GMM_cluster", label = FALSE, pt.size.factor = 3) +   
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("GMM Clustering") +
+  labs(fill = "Cell Type") +
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+
+p3 <- SpatialDimPlot(slide1, group.by = "HClust_cluster", label = FALSE,  pt.size.factor = 3) + 
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("Hierarchical Clustering") +
+  labs(fill = "Cell Type") +
+  theme(
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 15)
+  )
+  
+
+# Combine plots vertically for better readability
+(p1 / p2 / p3) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "right")
+
+# Calculate Adjusted Rand Index (ARI) vs Expert Annotation
+# Ensure both vectors are factors and align correctly
+expert <- as.factor(slide1$Expert_Annotation)
+bayes <- as.factor(slide1$BayesSpace_kmeans)
+gmm   <- as.factor(slide1$GMM_cluster)
+hclust <- as.factor(slide1$HClust_cluster)
+
+# Compute ARIs
+ari_bayes  <- adjustedRandIndex(expert, bayes)
+ari_gmm    <- adjustedRandIndex(expert, gmm)
+ari_hclust <- adjustedRandIndex(expert, hclust)
+
+# Combine ARI results into a dataframe
+ari_df <- data.frame(
+  Method = c("BayesSpace", "GMM", "Hierarchical"),
+  ARI = c(ari_bayes, ari_gmm, ari_hclust)
+)
+
+# Plot ARI comparison
+ggplot(ari_df, aes(x = Method, y = ARI, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  theme_minimal() +
+  ylim(0, 1) +
+  labs(title = "ARI vs Expert Annotation",
+       subtitle = "Comparison of clustering methods",
+       y = "Adjusted Rand Index", x = NULL) +
+  theme(text = element_text(size = 14),
+        plot.title = element_text(face = "bold", size = 16))
+
+```
