@@ -1,0 +1,6 @@
+library(qrcode)
+code <- qr_code("https://github.com/Abu1997-Pathan/Poster/blob/main/02_analysis.qmd")
+print(code)
+plot(code)
+#generate_svg(code, filename = "C:/Users/abuhu/OneDrive/Desktop/Initial_Prep/Initial_Prep/results/figures/qr.svg")
+generate_svg(code, filename = "C:/Users/abuhu/OneDrive/Desktop/Initial_Prep/qrs.svg")
