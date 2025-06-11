@@ -7,3 +7,8 @@ glmGamPoi
 mclust
 xfun
 mclust
+BayesSpace
+SingleCellExperiment
+spatialLIBD
+GPTCelltype
+SpatialExperiment
